@@ -57,19 +57,19 @@ class WC_Waafi_Payment_Gateway extends WC_Payment_Gateway
 			wc_gateway_waafipay()->settings->__set('enabled', 'no');
 			wc_gateway_waafipay()->settings->save();
         ?>
-        <div class="inline error"><p><strong><?php 'Gateway disabled'; ?></strong>: <?php 'WaafiPay Payment Gateway does not support your store currency.'; ?></p></div>
+        <div class="inline error"><p><strong><?php echo esc_html('Gateway disabled'); ?></strong>: <?php echo esc_html('WaafiPay Payment Gateway does not support your store currency.'); ?></p></div>
         <?php
     }
     
     public function show_admin_options()
     {
-        $plugin_data = get_plugin_data(ABSPATH. 'wp-content/plugins/wc_waafipay/wc_waafipay.php');
+        $plugin_data = get_plugin_data(wc_gateway_waafipay()->file);
         $plugin_version = $plugin_data['Version'];
  
     ?>
-        <h3><?php 'HPP WAAFIPAY'; ?><span><?php echo 'Version '.$plugin_version; ?></span> </h3>
+        <h3><?php echo esc_html('HPP WAAFIPAY'); ?> <span><?php echo esc_html('Version '.$plugin_version); ?></span> </h3>
         <div id="wc_get_started">
-            <span class="main"><?php 'HPP Hosted Payment Page'; ?></span>
+            <span class="main"><?php echo esc_html('HPP Hosted Payment Page'); ?></span>
             <span><br><b>NOTE: </b> You must enter your store ID , publishable key and merchant key</span>
         </div>
 
@@ -81,20 +81,81 @@ class WC_Waafi_Payment_Gateway extends WC_Payment_Gateway
 
     public function process_payment($order_id)
     {
-        return wc_gateway_waafipay()->checkout->process_payment($order_id);
+        $allowed_pay_from = array_merge(array('CREDIT_CARD'), (array) $this->waafi_payment_types);
+        $pay_from = isset($_POST['waafi_pay_from']) && is_string($_POST['waafi_pay_from']) ? wc_clean(wp_unslash($_POST['waafi_pay_from'])) : '';
+        if ($pay_from === '') {
+            $pay_from = "CREDIT_CARD";
+        }
+        if (!in_array($pay_from, $allowed_pay_from, true)) {
+            wc_add_notice(__('Please choose a WaafiPay payment method.', 'woothemes'), 'error');
+            return;
+        }
+        $order = wc_get_order( $order_id );
+        $requestId = $this->generateRandomString();
+        $referenceId = (string) $order_id;
+        // The order key is the value the legacy post_password column held for orders.
+        $invoiceId = $order->get_order_key();
+
+        update_post_meta($order_id, 'wc_waafipay_requestId', $requestId);
+        update_post_meta($order_id, 'wc_waafipay_referenceid', $referenceId);
+        update_post_meta($order_id, 'wc_waafipay_invoice', $invoiceId);
+        update_post_meta($order_id, 'wc_waafipay_timestamp', time());
+
+        $arrresp = $this->call_asm('HPP_PURCHASE', $requestId, array(
+            'hppSuccessCallbackUrl' => get_site_url().'/wc-api/waafisuccess/?id='.$order_id,
+            'hppFailureCallbackUrl' => get_site_url().'/wc-api/waafifail/?id='.$order_id,
+            'hppRespDataFormat'     => '4',
+            'paymentMethod'         => $pay_from,
+            'transactionInfo'       => array(
+                'referenceId' => $referenceId,
+                'invoiceId'   => $invoiceId,
+                'amount'      => (string) $order->get_total(),
+                'currency'    => $order->get_currency(),
+                'description' => 'Woocommerce Order Payment',
+            ),
+        ));
+
+        if (!$arrresp || !isset($arrresp['responseCode']) || (string) $arrresp['responseCode'] !== '2001' || empty($arrresp['params']['hppUrl'])) {
+            $message = !empty($arrresp['responseMsg']) ? $arrresp['responseMsg'] : __('WaafiPay is not available right now. Please try again.', 'woothemes');
+            wc_add_notice(esc_html($message), 'error');
+            return;
+        }
+
+        $returnurl = $arrresp['params']['hppUrl'];
+        $hppRequestId = isset($arrresp['params']['hppRequestId']) ? $arrresp['params']['hppRequestId'] : '';
+        $referenceId = isset($arrresp['params']['referenceId']) ? (string) $arrresp['params']['referenceId'] : $referenceId;
+        update_post_meta($order_id, 'waafi_pay_from', $pay_from);
+        update_post_meta($order_id, 'wc_waafipay_referenceid', $referenceId);
+        update_post_meta($order_id, 'wc_waafipay_requestId', $hppRequestId);
+        update_post_meta($order_id, 'hppwaafiretrnurl', $returnurl);
+        return array(
+            'result' => 'success',
+            'redirect' => add_query_arg(array('suc' => 'OK', 'rurl' => rawurlencode($returnurl), 'hrid' => rawurlencode($hppRequestId), 'rfid' => rawurlencode($referenceId)), wc_gateway_waafipay()->plugin_url.'includes/redirect.php'),
+        );
     }
-	
+
+	public function generateRandomString($length = 15) {
+		$characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+		$charactersLength = strlen($characters);
+		$randomString = '';
+		for ($i = 0; $i < $length; $i++) {
+			$randomString .= $characters[rand(0, $charactersLength - 1)];
+		}
+		return $randomString;
+	}
+
 	public function payment_fields() {
 		 global $woocommerce;
 		 if ( $this->description ) {
-				echo '<p>'.$this->description.'</p>';
+				echo '<p>'.wp_kses_post($this->description).'</p>';
 			}	
 			echo '<fieldset id="wc-' . esc_attr( $this->id ) . '-cc-form" class="wc-credit-card-form wc-payment-form" style="background:transparent;">';
 			
 			$inputhtml = "";
 			
-			foreach($this->waafi_payment_types as $waafi_payment_types){
+			foreach((array) $this->waafi_payment_types as $waafi_payment_types){
 				
+				$txt_waafi = $waafi_payment_types;
 				if($waafi_payment_types == "CREDIT_CARD"){
 					$txt_waafi = "Credit Card";
 				}elseif($waafi_payment_types == "MWALLET_ACCOUNT"){
@@ -103,8 +164,8 @@ class WC_Waafi_Payment_Gateway extends WC_Payment_Gateway
 					$txt_waafi = "Bank Account";
 				}
 				$inputhtml .=  '<div class="form-row form-row-wide">
-									<input id="waafi_pay_from_macc" name="waafi_pay_from" value="'.$waafi_payment_types.'" class="input-radio"  type="radio" />
-									<span style="font-size: 16px;margin-left: 12px;">'.$txt_waafi.'</span>
+									<input id="'.esc_attr('waafi_pay_from_'.strtolower($waafi_payment_types)).'" name="waafi_pay_from" value="'.esc_attr($waafi_payment_types).'" class="input-radio"  type="radio" />
+									<label for="'.esc_attr('waafi_pay_from_'.strtolower($waafi_payment_types)).'" style="font-size: 16px;margin-left: 12px;display:inline;">'.esc_html($txt_waafi).'</label>
 								</div>';
 			}
 
@@ -183,7 +244,7 @@ class WC_Waafi_Payment_Gateway extends WC_Payment_Gateway
 
 		$order_id = $order->get_id();
 		$referenceId = (string) get_post_meta($order_id, 'wc_waafipay_referenceid', true);
-		$result = $this->call_asm('HPP_GETRESULTINFO', wp_generate_password(15, false), array(
+		$result = $this->call_asm('HPP_GETRESULTINFO', $this->generateRandomString(), array(
 			'hppResultToken' => $hppResultToken,
 			'referenceId'    => $referenceId,
 		));

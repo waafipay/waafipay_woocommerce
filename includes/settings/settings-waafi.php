@@ -60,7 +60,7 @@ return array(
 				),
 				'test_waafi_publishable_key' => array(
 					'title'       => 'Test HPP Key',
-					'type'        => 'text'
+					'type'        => 'password'
 				),
 				'test_waafi_merchant_id' => array(
 					'title'       => 'Test Merchant ID',
@@ -72,7 +72,7 @@ return array(
 				),
 				'waafi_publishable_key' => array(
 					'title'       => 'Live HPP Key',
-					'type'        => 'text'
+					'type'        => 'password'
 				),
 				'waafi_merchant_id' => array(
 					'title'       => 'Live Merchant ID',

@@ -31,10 +31,6 @@ class WC_Gateway_Waafi_Plugin
         
         add_action('plugins_loaded', array($this, 'bootstrap'));
         add_filter('plugin_action_links_' . plugin_basename($this->file), array($this, 'plugin_action_links'));
-        
-        $waafipaySettings = (array) get_option('woocommerce_hpp-waafipay_settings', array());
-		add_action('admin_enqueue_scripts', array($this, 'admin_load_js'));
-        
     }
 
     public function bootstrap()
@@ -68,12 +64,6 @@ class WC_Gateway_Waafi_Plugin
     }
 
 
-    function admin_load_js(){
-        wp_enqueue_script( 'custom_js', plugins_url( '../assets/js/custom.js', __FILE__ ), array('jquery') );
-    }
-
-    
-
     public function show_bootstrap_warning()
     {
         $dependencies_message = get_option('wc_gateway_waafi_bootstrap_warning_message', '');
@@ -103,12 +93,10 @@ class WC_Gateway_Waafi_Plugin
         require_once($this->includes_path . 'class-wc-gateway-waafi-settings.php');
         require_once($this->includes_path . 'class-wc-gateway-waafi-gateway-loader.php');
         require_once($this->includes_path . 'class-wc-gateway-waafi-admin-handler.php');
-        require_once($this->includes_path . 'class-wc-gateway-waafi-checkout-handler.php');
 
         $this->settings       = new WC_Gateway_Waafi_Settings();
         $this->gateway_loader = new WC_Gateway_waafi_Gateway_Loader();
         $this->admin          = new WC_Gateway_Waafi_Admin_Handler();
-        $this->checkout       = new WC_Gateway_Waafi_Checkout_Handler();
     }
 
     /**
