@@ -1,7 +1,4 @@
 <?php
-/**
-* Checkout handler class.
-*/
 
 //directory access forbidden
 if (!defined('ABSPATH')) {
@@ -19,122 +16,59 @@ class WC_Gateway_Waafi_Checkout_Handler
         $this->payment_mode_woocomm = wc_gateway_waafipay()->settings->__get('payment_mode');
     }
     
-    /*
-    * Process payment for checkout
-    *
-    * @param order id (int)
-    * @access public
-    * @return array
-    */
     public function process_payment($order_id)
     {
-			global $woocommerce;
-
-			if(empty($_POST['waafi_pay_from'])){
+			$allowed_pay_from = array_merge(array('CREDIT_CARD'), (array) $this->waafi_payment_gateway->waafi_payment_types);
+			$pay_from = isset($_POST['waafi_pay_from']) && is_string($_POST['waafi_pay_from']) ? wc_clean(wp_unslash($_POST['waafi_pay_from'])) : '';
+			if ($pay_from === '') {
 				$pay_from = "CREDIT_CARD";
-			}else{
-				$pay_from = $_POST['waafi_pay_from'];
+			}
+			if (!in_array($pay_from, $allowed_pay_from, true)) {
+				wc_add_notice(__('Please choose a WaafiPay payment method.', 'woothemes'), 'error');
+				return;
 			}
 			$order = wc_get_order( $order_id );
-			$order_amount = $order->get_total();
-			$currency_code = $order->get_currency();
 			$requestId = $this->generateRandomString();
-			$orderdata = get_post($order_id);
-			$post_password = $orderdata->post_password;
-			
-			$timestamp = time();
-			$orderid = $order_id;
-			
-			
-			$storeId = $this->waafi_payment_gateway->store_id;
-			$hppKey = $this->waafi_payment_gateway->publishable_key;
-			$merchantUid = $this->waafi_payment_gateway->merchant_id;
+			$referenceId = (string) $order_id;
+			// The order key is the value the legacy post_password column held for orders.
+			$invoiceId = $order->get_order_key();
 
-			$referenceId = $orderid;
-			// $invoiceId = $timestamp.$order_id;
-			$invoiceId = $post_password;
+			update_post_meta($order_id, 'wc_waafipay_requestId', $requestId);
+			update_post_meta($order_id, 'wc_waafipay_referenceid', $referenceId);
+			update_post_meta($order_id, 'wc_waafipay_invoice', $invoiceId);
+			update_post_meta($order_id, 'wc_waafipay_timestamp', time());
 
-			update_post_meta($order_id, 'wc_waafipay_requestId', $requestId);	
-			update_post_meta($order_id, 'wc_waafipay_referenceid', $referenceId);	
-			update_post_meta($order_id, 'wc_waafipay_invoice', $invoiceId);	
-			update_post_meta($order_id, 'wc_waafipay_timestamp', $timestamp);	
+			$arrresp = $this->waafi_payment_gateway->call_asm('HPP_PURCHASE', $requestId, array(
+				'hppSuccessCallbackUrl' => get_site_url().'/wc-api/waafisuccess/?id='.$order_id,
+				'hppFailureCallbackUrl' => get_site_url().'/wc-api/waafifail/?id='.$order_id,
+				'hppRespDataFormat'     => '4',
+				'paymentMethod'         => $pay_from,
+				'transactionInfo'       => array(
+					'referenceId' => $referenceId,
+					'invoiceId'   => $invoiceId,
+					'amount'      => (string) $order->get_total(),
+					'currency'    => $order->get_currency(),
+					'description' => 'Woocommerce Order Payment',
+				),
+			));
 
-			$cust_redirecturlsuc = get_site_url().'/wc-api/waafisuccess/?id='.$order_id;
-			$cust_redirecturlfail = get_site_url().'/wc-api/waafifail/?id='.$order_id;
-			
-			$apiurl = $this->waafi_payment_gateway->apiurl;
+			if (!$arrresp || !isset($arrresp['responseCode']) || (string) $arrresp['responseCode'] !== '2001' || empty($arrresp['params']['hppUrl'])) {
+				$message = !empty($arrresp['responseMsg']) ? $arrresp['responseMsg'] : __('WaafiPay is not available right now. Please try again.', 'woothemes');
+				wc_add_notice(esc_html($message), 'error');
+				return;
+			}
 
-            $curl = curl_init();
-
-				curl_setopt_array($curl, array(
-				  CURLOPT_URL => $apiurl,
-				  CURLOPT_RETURNTRANSFER => true,
-				  CURLOPT_ENCODING => '',
-				  CURLOPT_MAXREDIRS => 10,
-				  CURLOPT_TIMEOUT => 0,
-				  CURLOPT_FOLLOWLOCATION => true,
-				  CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-				  CURLOPT_CUSTOMREQUEST => 'POST',
-				  CURLOPT_POSTFIELDS =>'{
-					"schemaVersion"     : "1.0",
-					"requestId"         : "'.$requestId.'",
-					"timestamp"         : "'.$timestamp.'",
-					"channelName"       : "WEB",
-					"serviceName"       : "HPP_PURCHASE",
-					"serviceParams": {
-							"storeId"               : "'.$storeId.'",
-							"hppKey"                : "'.$hppKey.'",  
-							"merchantUid"           : "'.$merchantUid.'",
-							"hppSuccessCallbackUrl" : "'.$cust_redirecturlsuc.'",
-							"hppFailureCallbackUrl" : "'.$cust_redirecturlfail.'",
-							"hppRespDataFormat"     : "4",  
-							"paymentMethod"         : "'.$pay_from.'",
-							"transactionInfo"       : {
-									"referenceId"   : "'.$referenceId.'",
-									"invoiceId"     : "'.$invoiceId.'",
-									"amount"        : "'.$order_amount.'",
-									"currency"      : "'.$currency_code.'",
-									"description"   : "Woocommerce Order Payment"
-							}
-					}
-				}',
-				  CURLOPT_HTTPHEADER => array(
-					'Content-Type: application/json'
-				  ),
-				));
-
-				$response = curl_exec($curl);
-				$err     = curl_errno( $curl );
-				$errmsg  = curl_error( $curl );
-				
-				if( !is_wp_error( $response ) || !empty($response) ) {
-					$arrresp = json_decode($response,TRUE);
-					if($arrresp['errorCode'] == 0 && $arrresp['responseMsg'] == "RCS_SUCCESS"){
-						$returnurl = $arrresp['params']['hppUrl'];
-						$hppRequestId = $arrresp['params']['hppRequestId'];
-						$referenceId = $arrresp['params']['referenceId'];
-						update_post_meta($order_id, 'waafi_pay_from', $pay_from);	
-						update_post_meta($order_id, 'wc_waafipay_referenceid', $referenceId);	
-						update_post_meta($order_id, 'wc_waafipay_requestId', $hppRequestId);	
-						update_post_meta($order_id, 'hppwaafiretrnurl', $returnurl);	
-						$redirect_url = plugin_dir_url(__FILE__).'redirect.php?suc=OK&rurl='.$returnurl.'&hrid='.$hppRequestId.'&rfid='.$referenceId;	
-						// Redirect to the thank you page
-						return array(
-							'result' => 'success',
-							// 'redirect' =>  $this->get_return_url( $order )
-							'redirect' =>  $redirect_url
-						);	
-					
-					}else{								
-							wc_add_notice(  $errmsg, 'error' );
-							return;
-					 }
-					
-				}else{
-							
-						wc_add_notice(  $errmsg, 'error' );
-						return;
-				 }	
+			$returnurl = $arrresp['params']['hppUrl'];
+			$hppRequestId = isset($arrresp['params']['hppRequestId']) ? $arrresp['params']['hppRequestId'] : '';
+			$referenceId = isset($arrresp['params']['referenceId']) ? (string) $arrresp['params']['referenceId'] : $referenceId;
+			update_post_meta($order_id, 'waafi_pay_from', $pay_from);
+			update_post_meta($order_id, 'wc_waafipay_referenceid', $referenceId);
+			update_post_meta($order_id, 'wc_waafipay_requestId', $hppRequestId);
+			update_post_meta($order_id, 'hppwaafiretrnurl', $returnurl);
+			return array(
+				'result' => 'success',
+				'redirect' => add_query_arg(array('suc' => 'OK', 'rurl' => rawurlencode($returnurl), 'hrid' => rawurlencode($hppRequestId), 'rfid' => rawurlencode($referenceId)), plugin_dir_url(__FILE__).'redirect.php'),
+			);
     }
 	
 	public function generateRandomString($length = 15) {
