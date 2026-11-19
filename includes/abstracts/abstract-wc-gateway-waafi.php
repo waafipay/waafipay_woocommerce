@@ -115,22 +115,24 @@ class WC_Waafi_Payment_Gateway extends WC_Payment_Gateway
             ),
         ));
 
-        if (!$arrresp || !isset($arrresp['responseCode']) || (string) $arrresp['responseCode'] !== '2001' || empty($arrresp['params']['hppUrl'])) {
-            $message = !empty($arrresp['responseMsg']) ? $arrresp['responseMsg'] : __('WaafiPay is not available right now. Please try again.', 'woothemes');
+        $isOrderCreated = isset($arrresp['responseCode']) && (string) $arrresp['responseCode'] === '2001';
+        $returnurl = isset($arrresp['params']['hppUrl']) ? (string) $arrresp['params']['hppUrl'] : '';
+        if (!$isOrderCreated || strtolower((string) wp_parse_url($returnurl, PHP_URL_SCHEME)) !== 'https') {
+            $message = !$isOrderCreated && !empty($arrresp['responseMsg']) ? $arrresp['responseMsg'] : __('WaafiPay is not available right now. Please try again.', 'woothemes');
             wc_add_notice(esc_html($message), 'error');
             return;
         }
 
-        $returnurl = $arrresp['params']['hppUrl'];
         $hppRequestId = isset($arrresp['params']['hppRequestId']) ? $arrresp['params']['hppRequestId'] : '';
         $referenceId = isset($arrresp['params']['referenceId']) ? (string) $arrresp['params']['referenceId'] : $referenceId;
         update_post_meta($order_id, 'waafi_pay_from', $pay_from);
         update_post_meta($order_id, 'wc_waafipay_referenceid', $referenceId);
         update_post_meta($order_id, 'wc_waafipay_requestId', $hppRequestId);
         update_post_meta($order_id, 'hppwaafiretrnurl', $returnurl);
+        // Every backend opens the payment page with GET; the older Java builds read these two values from the query string.
         return array(
             'result' => 'success',
-            'redirect' => add_query_arg(array('suc' => 'OK', 'rurl' => rawurlencode($returnurl), 'hrid' => rawurlencode($hppRequestId), 'rfid' => rawurlencode($referenceId)), wc_gateway_waafipay()->plugin_url.'includes/redirect.php'),
+            'redirect' => add_query_arg(array('hppRequestId' => rawurlencode($hppRequestId), 'referenceId' => rawurlencode($referenceId)), $returnurl),
         );
     }
 
@@ -145,7 +147,6 @@ class WC_Waafi_Payment_Gateway extends WC_Payment_Gateway
 	}
 
 	public function payment_fields() {
-		 global $woocommerce;
 		 if ( $this->description ) {
 				echo '<p>'.wp_kses_post($this->description).'</p>';
 			}	
