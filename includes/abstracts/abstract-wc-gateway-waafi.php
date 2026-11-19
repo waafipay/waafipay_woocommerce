@@ -31,7 +31,7 @@ class WC_Waafi_Payment_Gateway extends WC_Payment_Gateway
         $this->description          = wc_gateway_waafipay()->settings->__get('description');
         $this->waafi_payment_types   = wc_gateway_waafipay()->settings->__get('waafi_payment_types');
 				
-		$this->apiurl = $this->testmode ? 'https://sandbox.waafipay.net/asm' : 'https://api.waafipay.net/asm';
+		$this->apiurl = $this->testmode ? 'https://sandbox.waafipay.com/asm' : 'https://api.waafipay.net/asm';
 		
 		$this->store_id = $this->testmode ? wc_gateway_waafipay()->settings->__get( 'test_waafi_store_id' ) : wc_gateway_waafipay()->settings->__get( 'waafi_store_id' );
 		
